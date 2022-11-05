@@ -1,0 +1,11 @@
+[package]
+name = "stellaris-localisation-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+trim-in-place = "0.1"
+
+strum = "0.24"
+strum_macros = "0.24"
