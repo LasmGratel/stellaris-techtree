@@ -2,9 +2,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
+use datasize::{data_size, DataSize};
 use crate::Technology;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, DataSize)]
 pub struct TechnologyTree {
     pub start_tech: Vec<Rc<Node>>,
     pub dangling_tech: Vec<Rc<Node>>,
@@ -71,14 +72,23 @@ impl TechnologyTree {
 }
 
 pub struct Node {
-    prev: RefCell<Vec<Rc<Node>>>,
-    next: RefCell<Vec<Rc<Node>>>,
+    pub(crate) prev: RefCell<Vec<Rc<Node>>>,
+    pub(crate) next: RefCell<Vec<Rc<Node>>>,
 
     // should be unique
     pub name: String,
 
     // maybe unresolved
     pub data: Option<Rc<Technology>>
+}
+
+impl DataSize for Node {
+    const IS_DYNAMIC: bool = true;
+    const STATIC_HEAP_SIZE: usize = 0;
+
+    fn estimate_heap_size(&self) -> usize {
+        data_size::<Vec<Rc<Node>>>(self.prev.borrow().as_ref()) + data_size::<Vec<Rc<Node>>>(self.next.borrow().as_ref()) + data_size(&self.data) + data_size(&self.name)
+    }
 }
 
 impl Debug for Node {

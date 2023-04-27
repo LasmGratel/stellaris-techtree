@@ -11,17 +11,19 @@ mod data;
 mod localisation;
 mod collection;
 mod tech_tree;
+mod console;
 
 use itertools::Itertools;
 use rayon::prelude::*;
 
 use tokio_stream::StreamExt;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{read_dir, DirEntry};
 use std::path::{Path, PathBuf};
 
 use std::{fs, io};
 use std::rc::Rc;
+use datasize::data_size;
 
 use crate::data::{StringOrStruct, Technology, TechnologyData, TechnologyNode};
 use crate::localisation::{fold_localisation_map, Languages, Text, read_localisations, Token};
@@ -31,6 +33,7 @@ use logos::Lexer;
 use measure_time::trace_time;
 use regex::Regex;
 use serde::Serialize;
+use serde_json::{json, Value};
 use tokio_stream::wrappers::ReadDirStream;
 use crate::tech_tree::TechnologyTree;
 
@@ -79,9 +82,7 @@ fn read_variables<P: AsRef<Path>>(path: P) -> io::Result<BTreeMap<String, String
         .collect::<Vec<DirEntry>>()
         .into_par_iter()
         .map(|x| {
-            Ok(TextDeserializer::from_windows1252_slice::<
-                BTreeMap<String, String>,
-            >(fs::read(x.path())?.as_slice())
+            Ok(TextDeserializer::from_windows1252_slice(fs::read(x.path())?.as_slice())
                 .expect(&format!("Parse mod variables failed, {:?}", x.path())))
         })
         .filter_map(|x: io::Result<BTreeMap<String, String>> | match x {
@@ -143,17 +144,10 @@ fn read_technologies<P: AsRef<Path>>(path: P) -> io::Result<(BTreeMap<String, St
     Ok((rx.into_iter().collect(), technologies))
 }
 
-async fn read_mods<P: AsRef<Path>>(path: P) -> Result<Vec<Mod>, Box<dyn std::error::Error>> {
-    let mod_paths = ReadDirStream::new(tokio::fs::read_dir(path).await?)
-        .filter(|x| x.as_ref().map_or(false, |entry| entry.path().is_dir()))
-        .filter(|x| x.is_ok())
-        .map(|x| x.unwrap())
-        .collect::<Vec<tokio::fs::DirEntry>>()
-        .await;
-
-    let descriptors = tokio_stream::iter(mod_paths.into_iter())
+async fn read_mods(mod_paths: &Vec<String>) -> Result<Vec<Mod>, Box<dyn std::error::Error>> {
+    let descriptors = tokio_stream::iter(mod_paths.iter())
         .then(|x| async move {
-            let path = x.path();
+            let path = Path::new(x);
 
             let descriptor: ModDescriptor = {
                 //trace_time!("Parsing descriptor for {:?}", path);
@@ -176,7 +170,7 @@ async fn read_mods<P: AsRef<Path>>(path: P) -> Result<Vec<Mod>, Box<dyn std::err
             scripted_variables.append(&mut tech_variables);
 
             Ok(Mod {
-                path,
+                path: path.to_path_buf(),
                 variables: scripted_variables,
                 technologies,
                 descriptor,
@@ -250,6 +244,8 @@ impl<'a> ReplaceVariables<'a> for String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let folders = console::query()?;
+
     use logos::Logos;
     let mut lexer: Lexer<Token> = Token::lexer("§Y$matter_decompressor_4$§!扭曲黑洞的引力，形成引力钻头，从奇点中获取£minerals£矿物。");
     println!("{:#?}", lexer.collect::<Vec<Token>>());
@@ -260,7 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut mods = {
         trace_time!("Parse all mods");
-        read_mods(WORKSHOP_PATH).await?
+        read_mods(&folders).await?
     };
 
     mods.push(parse_game_files(r#"D:\SteamLibrary\steamapps\common\Stellaris"#)?);
@@ -388,7 +384,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tech_tree.insert_map(&technologies_map);
 
-    std::fs::write("tech_tree.txt", format!("{:#?}", tech_tree))?;
+    println!("Tree usage: {} bytes", data_size(&tech_tree));
+
+    {
+        #[derive(Serialize, Hash, Eq, Clone, PartialEq)]
+        struct Link {
+            source: String,
+            target: String
+        }
+
+        let mut nodes = vec![];
+        let mut links = HashSet::new();
+        tech_tree.node_map.iter().for_each(|(id, node)| {
+            /*if node.data.is_some() {
+                nodes.push(node.data.as_ref().unwrap().clone())
+            }*/
+            let label = folded_localisations[&Languages::SimplifiedChinese].get(id)
+                .or(folded_localisations[&Languages::English].get(id))
+                .or(folded_localisations[&Languages::Default].get(id))
+                .map(|x| &x.value);
+           /* let label = node.data.as_ref()
+                .and_then(|x|
+                x.localisation.get(&Languages::SimplifiedChinese).or(x.localisation.get(&Languages::English)).or(x.localisation.get(&Languages::Default))
+            ).and_then(|x| x.name.as_ref());*/
+            nodes.push(json!({"id": id, "label": label}));
+
+            node.prev.borrow().iter().for_each(|prev| {
+                if &prev.name != id {
+                    links.insert(Link {
+                        source: prev.name.to_string(),
+                        target: id.to_string()
+                    });
+                }
+            });
+
+
+        });
+
+        std::fs::write("tech_tree.json", serde_json::to_string(&json!({"nodes": nodes, "links": links}))?)?;
+    }
 
     let technologies_map: HashMap<&str, TechnologyNode> = technologies_map.iter().map(|(id, tech)| {
         (*id, TechnologyNode {

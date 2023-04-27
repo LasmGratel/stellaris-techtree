@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_yaml = "0.9"
-jomini = { git = "https://github.com/rakaly/jomini.git", revision = "a4d641f" }
+jomini = "0.21.0"
 rayon = "1"
 strip_bom = "1"
 ariadne = "0.1"
@@ -36,7 +36,9 @@ logos-derive = "0.12"
 
 mimalloc = "0.1"
 
+datasize = "0.2.10"
 
+inquire = "0.5"
 
 [workspace]
 members = [
